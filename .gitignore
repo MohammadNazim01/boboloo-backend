@@ -1,0 +1,70 @@
+# =============================
+# Python
+# =============================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# =============================
+# Virtual Environment
+# =============================
+venv/
+.venv/
+env/
+
+# =============================
+# Environment Secrets
+# =============================
+.env
+.env.*
+*.env
+
+# =============================
+# Firebase Credentials
+# =============================
+firebase_service_account.json
+serviceAccountKey.json
+app/firebase/serviceAccountKey.json
+*.service_account*.json
+
+# =============================
+# Database
+# =============================
+*.db
+*.sqlite3
+
+# =============================
+# Alembic Cache
+# =============================
+alembic/versions/__pycache__/
+
+# =============================
+# Logs
+# =============================
+*.log
+
+# =============================
+# IDE
+# =============================
+.vscode/
+.idea/
+
+# =============================
+# OS Files
+# =============================
+.DS_Store
+Thumbs.db
+
+# =============================
+# Docker Local
+# =============================
+docker-compose.yml
+
+# =============================
+# Test Files
+# =============================
+tests/
+tmp/
+simulate_analytics_test.py

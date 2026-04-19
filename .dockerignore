@@ -1,0 +1,47 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment files
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Alembic cache
+alembic/versions/__pycache__/
+
+# Tests / temp
+tests/
+tmp/
+simulate_analytics_test.py
+
+# Local database
+*.db
+*.sqlite3
+
+# Node modules (if ever added)
+node_modules/
+
+# Docker
+docker-compose.yml
