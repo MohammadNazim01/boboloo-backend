@@ -19,10 +19,11 @@ Base = declarative_base()
 if settings.ENVIRONMENT == "production":
 
     # Production containers (Cloud Run / AWS)
+    # NullPool: no persistent pool — each request gets a fresh connection.
+    # pool_pre_ping is meaningless with NullPool and is omitted.
     engine = create_async_engine(
         settings.DATABASE_URL,
-        poolclass=NullPool,     # prevent connection explosion
-        pool_pre_ping=True,
+        poolclass=NullPool,
         echo=False,
     )
 

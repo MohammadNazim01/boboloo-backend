@@ -1,0 +1,30 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "nvs_storage.c"
+        "led_control.c"
+        "wifi_connect.c"
+        "mqtt_client.c"
+        "ble_provisioning.c"
+        "reset_button.c"
+        "ota_update.c"
+        "ota_validation.c"
+    INCLUDE_DIRS
+        "."
+    EMBED_FILES
+        "certs/emqx_ca.pem"   # EMQX Cloud broker CA certificate
+    REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_event
+        esp_netif
+        mqtt
+        bt
+        driver
+        esp_http_client
+        esp_https_ota
+        mbedtls
+        app_update
+        freertos
+        log
+)

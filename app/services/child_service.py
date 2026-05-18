@@ -2,6 +2,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException
 from datetime import datetime
+from app.core.redis import redis_client
+import json
 
 from app.database.models import Parent, Child
 from app.schemas.child_schema import (
@@ -20,7 +22,6 @@ async def create_child(
     child_data: ChildCreate,
 ):
 
-    # one child per parent
     result = await db.execute(
         select(Child).where(
             Child.parent_id == parent.id,
@@ -59,22 +60,32 @@ async def create_child(
             detail="Failed to create child"
         )
 
-    # clear any stale cache
-    await CacheService.delete(
-        f"child:{child.id}"
-    )
+    await CacheService.delete(f"child:{parent.id}")
+    await CacheService.delete(f"child:{child.id}")
 
     return child
 
 
 # =====================================================
-# GET CHILD
+# GET CHILD (WITH CACHE 🚀)
 # =====================================================
 async def get_child(
     db: AsyncSession,
     parent: Parent,
 ):
 
+    cache_key = f"child:{parent.id}"
+
+    # 🔥 STEP 1: TRY CACHE
+    try:
+        cached = await redis_client.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        # Redis fail → ignore
+        pass
+
+    # 🔥 STEP 2: DB QUERY
     result = await db.execute(
         select(Child).where(
             Child.parent_id == parent.id,
@@ -82,7 +93,34 @@ async def get_child(
         )
     )
 
-    return result.scalar_one_or_none()
+    child = result.scalar_one_or_none()
+
+    if not child:
+        return None
+
+    # 🔥 STEP 3: SERIALIZE
+    child_data = {
+        "id": str(child.id),
+        "name": child.name,
+        "age": child.age,
+        "guardian_name": child.guardian_name,
+        "interests": child.interests or [],
+        "keywords_filter": child.keywords_filter or [],
+        "focus_topics": child.focus_topics or [],
+        "onboarding_completed": child.onboarding_completed,
+    }
+
+    # 🔥 STEP 4: STORE IN CACHE
+    try:
+        await redis_client.set(
+            cache_key,
+            json.dumps(child_data),
+            ex=300  # 5 min TTL
+        )
+    except Exception:
+        pass
+
+    return child_data
 
 
 # =====================================================
@@ -110,7 +148,7 @@ async def update_child(
         )
 
     # =========================
-    # PATCH FIELDS
+    # PATCH
     # =========================
     if data.name is not None:
         child.name = data.name.strip()
@@ -143,15 +181,9 @@ async def update_child(
             detail="Failed to update child"
         )
 
-    # =========================
-    # CACHE INVALIDATION
-    # =========================
-    await CacheService.delete(
-        f"child:{child.id}"
-    )
-
-    await CacheService.delete(
-        f"analytics:{child.id}"
-    )
+    # 🔥 CACHE INVALIDATION
+    await CacheService.delete(f"child:{parent.id}")
+    await CacheService.delete(f"child:{child.id}")
+    await CacheService.delete(f"analytics:{child.id}")
 
     return child

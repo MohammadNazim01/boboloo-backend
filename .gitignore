@@ -58,11 +58,6 @@ alembic/versions/__pycache__/
 Thumbs.db
 
 # =============================
-# Docker Local
-# =============================
-docker-compose.yml
-
-# =============================
 # Test Files
 # =============================
 tests/

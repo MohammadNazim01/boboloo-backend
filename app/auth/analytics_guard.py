@@ -38,7 +38,7 @@ async def analytics_ready_guard(
 
     if not analytics:
         raise HTTPException(
-            status_code=200,
+            status_code=404,
             detail="Analytics not ready yet"
         )
 

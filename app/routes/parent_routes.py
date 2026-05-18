@@ -25,7 +25,7 @@ router = APIRouter(
 # ---------------------------------------------------------
 # Create Child (Onboarding)
 # ---------------------------------------------------------
-@router.post("/child", response_model=ChildResponse)
+@router.post("/signup", response_model=ChildResponse)
 async def add_child(
     child_data: ChildCreate,
     parent: Parent = Depends(get_current_parent),
@@ -37,7 +37,7 @@ async def add_child(
 # ---------------------------------------------------------
 # Get Child (Profile View)
 # ---------------------------------------------------------
-@router.get("/child", response_model=ChildResponse | None)
+@router.get("/login", response_model=ChildResponse | None)
 async def fetch_child(
     parent: Parent = Depends(get_current_parent),
     db: AsyncSession = Depends(get_db),
@@ -48,7 +48,7 @@ async def fetch_child(
 # ---------------------------------------------------------
 # Update Child (Profile Edit)
 # ---------------------------------------------------------
-@router.put("/child", response_model=ChildResponse)
+@router.put("/update", response_model=ChildResponse)
 async def update_profile(
     data: ChildUpdate,
     parent: Parent = Depends(get_current_parent),

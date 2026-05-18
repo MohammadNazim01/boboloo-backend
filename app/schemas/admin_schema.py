@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from uuid import UUID
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 # =====================================================
@@ -69,15 +69,7 @@ class AdminAnalyticsResponse(BaseModel):
 
     child_id: UUID
 
-    fq: float
-    vq: float
-    cq: float
-    mq: float
-    gq: float
-
-    velocity: Optional[str]
-    confidence: Optional[float]
-    trend_percent: Optional[float]
+    breakdown_json: Optional[Dict]
 
     updated_at: datetime
 

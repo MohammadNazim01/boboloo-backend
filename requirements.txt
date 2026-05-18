@@ -20,15 +20,27 @@ firebase-admin==6.5.0
 apscheduler==3.10.4
 
 # HTTP client (AI/internal services)
-httpx==0.27.0
+httpx>=0.27.0
 
 # Environment
 python-dotenv==1.0.1
 
 openai==2.26.0
 
-# Vocabulary analysis
+# Analytics / NLP
+# spacy 3.7.4 conflicts with fastapi-cli via typer version pin.
+# Use >=3.7.4 so pip can pick a compatible resolver path.
 wordfreq==3.0.3
+spacy>=3.7.4
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
+nltk>=3.9
 
 # Date handling
 python-dateutil==2.9.0
+
+redis==5.0.4
+
+gmqtt==0.6.13
+
+# AWS — firmware storage and pre-signed URL generation
+boto3==1.34.69

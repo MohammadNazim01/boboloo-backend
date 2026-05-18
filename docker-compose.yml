@@ -1,0 +1,112 @@
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # HTTP API SERVER — parent app, admin, factory, toy claim
+  # No MQTT dependency. Scales horizontally behind a load balancer.
+  # ─────────────────────────────────────────────────────────────────────────────
+  backend:
+    build: .
+    container_name: boboloo_backend
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      # Override .env localhost addresses with Docker service names.
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-boboloo}"
+      REDIS_URL: "redis://redis:6379"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # MQTT GATEWAY — sole owner of the EMQX broker connection
+  # Subscribes to toy topics → pushes to job_queue.
+  # Drains outbound_queue → publishes replies/commands to toys.
+  # ─────────────────────────────────────────────────────────────────────────────
+  mqtt_gateway:
+    build: .
+    container_name: boboloo_mqtt_gateway
+    command: python -m app.mqtt_gateway
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: "redis://redis:6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      disable: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # AI WORKER — pops from job_queue, calls OpenAI, saves to DB,
+  # pushes AI reply to outbound_queue for gateway to publish.
+  # ─────────────────────────────────────────────────────────────────────────────
+  worker:
+    build: .
+    container_name: boboloo_worker
+    command: python -m app.workers.worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-boboloo}"
+      REDIS_URL: "redis://redis:6379"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      disable: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # INFRASTRUCTURE
+  # ─────────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: boboloo_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: boboloo_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-boboloo}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+volumes:
+  postgres_data:
+  redis_data:

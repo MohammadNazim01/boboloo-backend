@@ -41,7 +41,8 @@ class ToyAskRequest(BaseModel):
 
 class ToyAskResponse(BaseModel):
     conversation_id: UUID
-    answer: str
+    status: str
+    answer: Optional[str] = None
 
 
 # =========================

@@ -1,0 +1,28 @@
+# Boboloo ESP32 Custom Partition Table
+# Target: 8MB flash (e.g., ESP32-WROOM-32E with W25Q64 or equivalent)
+#
+# Layout rationale:
+#   factory   — minimal recovery image (BLE + WiFi + MQTT + OTA only, no audio/AI).
+#               Write-protected in eFuse after manufacturing flash.
+#               Boots if both OTA partitions are corrupt/invalid.
+#   ota_0     — active production firmware slot (primary).
+#   ota_1     — staging slot for OTA updates.
+#   nvs_keys  — NVS encryption keys partition (AES-256 XTS).
+#               Generated per-device at factory; never readable after first write.
+#
+# OTA update sequence:
+#   Backend pushes cmd → toy downloads to inactive slot → SHA256 verify →
+#   esp_ota_set_boot_partition → reboot → mark_valid after WiFi+MQTT+heartbeat.
+#
+# Size check (8MB = 0x800000):
+#   0x10000 + 0x80000 + 0x200000 + 0x200000 + 0x1000 = 0x491000 (~4.6MB used)
+#   Remaining: ~3.4MB unallocated (available for SPIFFS or future expansion)
+#
+# Name,     Type, SubType,   Offset,     Size,     Flags
+nvs,        data, nvs,       0x9000,     0x6000,
+otadata,    data, ota,       0xf000,     0x2000,
+phy_init,   data, phy,       0x11000,    0x1000,
+factory,    app,  factory,   0x10000,    0x80000,
+ota_0,      app,  ota_0,     0x90000,    0x200000,
+ota_1,      app,  ota_1,     0x290000,   0x200000,
+nvs_keys,   data, nvs_keys,  0x490000,   0x1000,

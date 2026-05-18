@@ -125,7 +125,7 @@ async def get_conversations(
         select(Conversation)
         .where(Conversation.child_id == child_id)
         .order_by(Conversation.started_at.desc())
-        .limit(20)  # ✅ prevent overload
+        .limit(limit)
     )
 
     conversations = conv_result.scalars().all()

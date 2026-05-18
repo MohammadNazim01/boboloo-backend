@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from fastapi import HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.database.models import (
     Toy,
@@ -13,6 +16,7 @@ from app.database.models import (
     Child,
 )
 
+from app.core.redis import redis_client
 
 class ToyClaimService:
 
@@ -93,6 +97,13 @@ class ToyClaimService:
         await db.commit()
         await db.refresh(toy)
 
+        # 🔥 CACHE IN REDIS (IMPORTANT)
+        await redis_client.set(
+            f"toy_key:{key_hash}",
+            str(toy.id),
+            ex=86400
+        )
+
         return {
             "toy_uuid": toy.toy_uuid,
             "toy_api_key": raw_api_key,
@@ -130,12 +141,27 @@ class ToyClaimService:
                 detail="Unauthorized",
             )
 
-        # 🔄 Revoke all old keys
+        # 🔄 Fetch old key hashes before revoking so we can purge Redis
+        old_keys_result = await db.execute(
+            select(APIKey.key_hash).where(
+                APIKey.toy_id == toy.id,
+                APIKey.revoked == False,
+            )
+        )
+        old_hashes = old_keys_result.scalars().all()
+
         await db.execute(
             update(APIKey)
             .where(APIKey.toy_id == toy.id)
             .values(revoked=True)
         )
+
+        # Purge stale Redis entries so old keys stop authenticating immediately
+        for old_hash in old_hashes:
+            try:
+                await redis_client.delete(f"toy_key:{old_hash}")
+            except Exception as e:
+                logger.error(f"Failed to purge old toy_key from Redis: {e}")
 
         # 🔑 Generate new API key
         raw_api_key = secrets.token_urlsafe(32)
@@ -153,6 +179,13 @@ class ToyClaimService:
         )
 
         await db.commit()
+
+        # 🔥 CACHE NEW KEY
+        await redis_client.set(
+            f"toy_key:{key_hash}",
+            str(toy.id),
+            ex=86400
+        )
 
         return {
             "toy_api_key": raw_api_key,

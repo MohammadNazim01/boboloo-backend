@@ -59,4 +59,4 @@ CMD curl --fail http://localhost:8080/health || exit 1
 # ==============================
 # START SERVER
 # ==============================
-CMD ["gunicorn","-k","uvicorn.workers.UvicornWorker","app.main:app","--bind","0.0.0.0:8080","--workers","2","--timeout","60"]
+CMD ["gunicorn","-k","uvicorn.workers.UvicornWorker","app.main:app","--bind","0.0.0.0:8080","--workers","1","--timeout","60"]

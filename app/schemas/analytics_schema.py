@@ -1,50 +1,48 @@
 from pydantic import BaseModel
-from typing import Dict, Optional
-from datetime import datetime
+from typing import List
 
 
-class AnalyticsOverviewResponse(BaseModel):
+class VocabularySummary(BaseModel):
+    total_words: int
+    unique_words: int
+    new_words: int
+    trend: str
 
-    cards: Dict[str, float]
 
-    velocity: Optional[str]
-    confidence: Optional[float]
-    trend_percent: Optional[float]
+class PeriodStats(BaseModel):
+    total_words: int
+    unique_words: int
+    new_words: int
 
-    updated_at: datetime
 
-class GQDetailResponse(BaseModel):
+class DeltaStats(BaseModel):
+    total_words: str
+    unique_words: str
+    new_words: str
 
-    gq_score: float
-    whole_child_map: Dict[str, float]
-    development: Dict
-    velocity: Dict
-    insight: str
 
-class FQDetailResponse(BaseModel):
+class ComparisonBlock(BaseModel):
+    today: PeriodStats
+    yesterday: PeriodStats
+    today_vs_yesterday: DeltaStats
 
-    fq_score: float
-    stage: str
-    fluency_map: Dict
-    weekly_action: str
 
-class VQDetailResponse(BaseModel):
+class WeeklyGraphPoint(BaseModel):
+    date: str
+    total_words: int
+    unique_words: int
+    new_words: int
 
-    vq_score: float
-    stage: str
-    vocabulary_map: Dict
-    weekly_action: str
 
-class CQDetailResponse(BaseModel):
+class MonthlyGraphPoint(BaseModel):
+    week: int
+    total_words: int
+    unique_words: int
+    new_words: int
 
-    cq_score: float
-    stage: str
-    communication_map: Dict
-    weekly_action: str
 
-class MQDetailResponse(BaseModel):
-
-    mq_score: float
-    stage: str
-    memory_map: Dict
-    weekly_action: str
+class VocabularyDetailResponse(BaseModel):
+    summary: VocabularySummary
+    comparison: ComparisonBlock
+    weekly_graph: List[WeeklyGraphPoint]
+    monthly_graph: List[MonthlyGraphPoint]

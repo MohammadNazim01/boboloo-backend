@@ -1,10 +1,11 @@
 import asyncio
-import math
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
-from sqlalchemy import select, func
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.database import AsyncSessionLocal
+
 from app.database.models import (
     Child,
     Conversation,
@@ -12,37 +13,34 @@ from app.database.models import (
     ChildAnalytics,
     AnalyticsHistory,
     ChildVocabularyMemory,
+    ChildStreak,
 )
 
-from app.services.analytics_engine.engine import generate_analytics
-from app.services.analytics_engine.velocity import classify_velocity
-
-
-# =====================================================
-# AGE CALCULATION
-# =====================================================
-
-def calculate_age_years(birth_date):
-    if not birth_date:
-        return 0
-
-    today = date.today()
-    years = today.year - birth_date.year
-
-    if (today.month, today.day) < (birth_date.month, birth_date.day):
-        years -= 1
-
-    return years
+from app.services.analytics_engine.engine import (
+    generate_analytics,
+)
 
 
 # =====================================================
 # UPDATE VOCABULARY MEMORY
 # =====================================================
 
-async def update_vocabulary_memory(db, child_id, words):
+async def update_vocabulary_memory(
+    db: AsyncSession,
+    child_id,
+    words,
+):
 
     today = date.today()
-    unique_words = {w.lower() for w in words}
+
+    unique_words = {
+        w.lower()
+        for w in words
+    }
+
+    # -----------------------------------------
+    # FETCH EXISTING
+    # -----------------------------------------
 
     result = await db.execute(
         select(ChildVocabularyMemory).where(
@@ -50,16 +48,25 @@ async def update_vocabulary_memory(db, child_id, words):
         )
     )
 
-    existing_records = {r.word: r for r in result.scalars().all()}
+    existing_records = {
+        r.word: r
+        for r in result.scalars().all()
+    }
+
+    # -----------------------------------------
+    # UPSERT MEMORY
+    # -----------------------------------------
 
     for word in unique_words:
 
         if word in existing_records:
+
             record = existing_records[word]
             record.usage_count += 1
             record.last_seen = today
 
         else:
+
             db.add(
                 ChildVocabularyMemory(
                     child_id=child_id,
@@ -72,38 +79,71 @@ async def update_vocabulary_memory(db, child_id, words):
 
 
 # =====================================================
-# REAL NOVELTY
+# UPDATE CONVERSATION STREAK
 # =====================================================
 
-async def compute_real_novelty(db, child_id):
+async def update_conversation_streak(
+    db: AsyncSession,
+    child_id,
+    talked_today: bool,
+    today: date,
+):
+    """Update the child's daily conversation streak.
 
-    today = date.today()
+    Called for every child on every batch run, before the message-count
+    gate, so even a single message keeps the streak alive.
+
+    Only writes to DB when the child talked today — children who were
+    silent get no write at all. The API computes "broken" at read time
+    from last_conversation_date, so no nightly reset writes are needed.
+    """
+
+    if not talked_today:
+        return
+
+    yesterday = today - timedelta(days=1)
 
     result = await db.execute(
-        select(ChildVocabularyMemory).where(
-            ChildVocabularyMemory.child_id == child_id
-        )
+        select(ChildStreak).where(ChildStreak.child_id == child_id)
     )
+    streak = result.scalar_one_or_none()
 
-    records = result.scalars().all()
+    if streak is None:
+        db.add(
+            ChildStreak(
+                child_id=child_id,
+                current_streak=1,
+                longest_streak=1,
+                last_conversation_date=today,
+                streak_started_at=today,
+            )
+        )
+        return
 
-    new_words = 0
-    reused_words = 0
+    # Already processed today — idempotent, nothing to do.
+    if streak.last_conversation_date == today:
+        return
 
-    for r in records:
-        if r.first_seen == today:
-            new_words += 1
-            if r.usage_count > 1:
-                reused_words += 1
+    if streak.last_conversation_date == yesterday:
+        # Consecutive day — extend.
+        streak.current_streak += 1
+    else:
+        # Gap — reset and start a new run.
+        streak.current_streak = 1
+        streak.streak_started_at = today
 
-    return new_words, reused_words
+    streak.longest_streak = max(streak.longest_streak, streak.current_streak)
+    streak.last_conversation_date = today
 
 
 # =====================================================
-# PROCESS CHILD
+# PROCESS SINGLE CHILD
 # =====================================================
 
-async def process_child(child, now):
+async def process_child(
+    child,
+    now,
+):
 
     today = date.today()
 
@@ -111,217 +151,240 @@ async def process_child(child, now):
 
         try:
 
-            # AGE
-            age = child.age
-            if child.birth_date:
-                age = calculate_age_years(child.birth_date)
+            # =====================================
+            # CHECK TODAY'S CONVERSATION EXISTS
+            # =====================================
 
-            # MESSAGE COUNT
-            msg_result = await db.execute(
-                select(func.count(Message.id))
-                .join(Conversation, Message.conversation_id == Conversation.id)
-                .where(
+            conv_result = await db.execute(
+                select(Conversation).where(
                     Conversation.child_id == child.id,
                     Conversation.conversation_date == today,
                 )
             )
+            conversation = conv_result.scalar_one_or_none()
 
-            total_messages = msg_result.scalar() or 0
+            # =====================================
+            # UPDATE CONVERSATION STREAK
+            # Runs before the message-count gate so
+            # even 1 message keeps the streak alive.
+            # =====================================
 
-            if total_messages < 10:
-                print(f"⚠️ Not enough messages for child {child.id}")
-                return
+            await update_conversation_streak(
+                db=db,
+                child_id=child.id,
+                talked_today=conversation is not None,
+                today=today,
+            )
 
-            # FETCH MESSAGES
+            # =====================================
+            # FETCH TODAY MESSAGES
+            # =====================================
+
             messages_result = await db.execute(
+
                 select(Message)
-                .join(Conversation, Message.conversation_id == Conversation.id)
+
+                .join(
+                    Conversation,
+                    Message.conversation_id
+                    == Conversation.id
+                )
+
                 .where(
                     Conversation.child_id == child.id,
-                    Conversation.conversation_date == today,
+
+                    Conversation.conversation_date
+                    == today,
                 )
+
                 .order_by(Message.created_at)
             )
 
-            raw_messages = messages_result.scalars().all()
+            raw_messages = (
+                messages_result.scalars().all()
+            )
 
-            formatted_messages = [
-                {"role": m.role, "content": m.content}
+            # =====================================
+            # USER TEXT ONLY
+            # =====================================
+
+            text_list = [
+
+                m.content
+
                 for m in raw_messages
+
+                if str(m.role).lower().endswith("user")
             ]
 
-            # PREVIOUS ANALYTICS
-            prev_result = await db.execute(
-                select(ChildAnalytics).where(
-                    ChildAnalytics.child_id == child.id
+            # =====================================
+            # MINIMUM DATA CHECK (user msgs only)
+            # Streak is already committed above —
+            # only vocabulary analytics needs 3+ msgs.
+            # =====================================
+
+            if len(text_list) < 3:
+
+                await db.commit()
+                print(f"[SKIP] Not enough messages for child {child.id}")
+
+                return
+
+            # =====================================
+            # FETCH EXISTING VOCAB
+            # =====================================
+
+            vocab_result = await db.execute(
+
+                select(
+                    ChildVocabularyMemory.word
+                )
+
+                .where(
+                    ChildVocabularyMemory.child_id
+                    == child.id
                 )
             )
 
-            analytics = prev_result.scalars().first()
+            existing_words = [
 
-            previous_scores = None
-            previous_gq = None
+                row[0]
 
-            if analytics:
-                previous_scores = {
-                    "fq": analytics.fq,
-                    "vq": analytics.vq,
-                    "cq": analytics.cq,
-                    "mq": analytics.mq,
-                    "gq": analytics.gq,
-                }
-                previous_gq = analytics.gq
+                for row in vocab_result.all()
+            ]
 
-            # RUN ENGINE
+            # =====================================
+            # RUN ANALYTICS ENGINE
+            # =====================================
+
             result = generate_analytics(
-                messages=formatted_messages,
-                age=age,
-                previous_scores=previous_scores,
+                text_list=text_list,
+                existing_words=existing_words,
             )
 
-            result["signals"]["previous_gq"] = previous_gq
+            vocabulary = result.get(
+                "vocabulary",
+                {}
+            )
 
-            scores = result["quotients"]
-            breakdown = result["breakdown"]
-            confidence = result["confidence"]
+            # =====================================
+            # UPDATE VOCAB MEMORY
+            # =====================================
 
-            # ------------------------------------------
-            # VOCAB MEMORY UPDATE
-            # ------------------------------------------
+            unique_words = vocabulary.get(
+                "UniqueWordsList",
+                []
+            )
 
-            signals = result.get("signals", {})
-            content_words = signals.get("content_words_list", [])
+            if unique_words:
 
-            if content_words:
                 await update_vocabulary_memory(
-                    db,
-                    child.id,
-                    content_words,
+                    db=db,
+                    child_id=child.id,
+                    words=unique_words,
                 )
 
-            # ------------------------------------------
-            # NOVELTY
-            # ------------------------------------------
+            # =====================================
+            # FETCH / CREATE ANALYTICS
+            # =====================================
 
-            new_words, reused_words = await compute_real_novelty(
-                db,
-                child.id,
-            )
+            analytics_result = await db.execute(
 
-            signals["new_words_introduced"] = new_words
-            signals["new_words_reused"] = reused_words
+                select(ChildAnalytics)
 
-            if "vq" in breakdown:
-                breakdown["vq"]["new_words_introduced"] = new_words
-                breakdown["vq"]["new_words_reused"] = reused_words
-
-            # ------------------------------------------
-            # 🔥 FINAL VQ CALCULATION (FIXED)
-            # ------------------------------------------
-
-            vq_result = await db.execute(
-                select(func.count())
-                .select_from(ChildVocabularyMemory)
-                .where(ChildVocabularyMemory.child_id == child.id)
-            )
-
-            vq_count = vq_result.scalar() or 0
-
-            # LOG SCALE SIZE
-            vq_size = min(100, math.log(vq_count + 1) * 20)
-
-            # RETENTION
-            if new_words > 0:
-                retention = min(100, (reused_words / new_words) * 100)
-            else:
-                retention = 0
-
-            # FINAL SCORE
-            vq_score = round(
-                0.7 * vq_size +
-                0.3 * retention,
-                1
-            )
-
-            # PREVENT DROP (optional safety)
-            if analytics and analytics.vq:
-                vq_score = max(vq_score, analytics.vq)
-
-            scores["vq"] = vq_score
-
-            # ------------------------------------------
-            # TREND + VELOCITY
-            # ------------------------------------------
-
-            trend_percent = 0.0
-
-            if previous_gq and previous_gq != 0:
-                trend_percent = round(
-                    ((scores["gq"] - previous_gq) / previous_gq) * 100,
-                    2,
+                .where(
+                    ChildAnalytics.child_id
+                    == child.id
                 )
+            )
 
-            velocity = classify_velocity(previous_gq, scores["gq"])
-
-            # ------------------------------------------
-            # SAVE ANALYTICS
-            # ------------------------------------------
+            analytics = (
+                analytics_result
+                .scalars()
+                .first()
+            )
 
             if not analytics:
-                analytics = ChildAnalytics(child_id=child.id)
+
+                analytics = ChildAnalytics(
+                    child_id=child.id,
+                    updated_at=now,
+                )
+
                 db.add(analytics)
 
-            analytics.fq = scores["fq"]
-            analytics.vq = scores["vq"]
-            analytics.cq = scores["cq"]
-            analytics.mq = scores["mq"]
-            analytics.gq = scores["gq"]
+            # =====================================
+            # SAVE ANALYTICS JSON
+            # =====================================
 
-            analytics.velocity = velocity
-            analytics.confidence = confidence
-            analytics.trend_percent = trend_percent
-
-            analytics.breakdown_json = {
-                "breakdown": breakdown,
-                "signals": result.get("signals", {}),
+            # vocabulary_service returns Python sets — convert to lists for JSONB
+            vocabulary_json = {
+                "TotalWordsCount": vocabulary.get("TotalWordsCount", 0),
+                "UniqueWordsCount": vocabulary.get("UniqueWordsCount", 0),
+                "NewWordsCount": vocabulary.get("NewWordsCount", 0),
+                "UniqueWordsList": list(vocabulary.get("UniqueWordsList", [])),
+                "NewWordsList": list(vocabulary.get("NewWordsList", [])),
             }
 
-            analytics.algorithm_version = result["algorithm_version"]
+            analytics.breakdown_json = {
+                "vocabulary": vocabulary_json
+            }
+
             analytics.updated_at = now
 
-            # HISTORY
-            existing = await db.execute(
-                select(AnalyticsHistory).where(
-                    AnalyticsHistory.child_id == child.id,
-                    AnalyticsHistory.analytics_date == today
+            # =====================================
+            # HISTORY SNAPSHOT
+            # =====================================
+
+            history_result = await db.execute(
+
+                select(AnalyticsHistory)
+
+                .where(
+                    AnalyticsHistory.child_id
+                    == child.id,
+
+                    AnalyticsHistory.analytics_date
+                    == today,
                 )
             )
 
-            existing_row = existing.scalars().first()
+            history = (
+                history_result
+                .scalars()
+                .first()
+            )
 
-            if not existing_row:
+            if not history:
+
                 history = AnalyticsHistory(
                     child_id=child.id,
                     analytics_date=today,
-                    fq=scores["fq"],
-                    vq=scores["vq"],
-                    cq=scores["cq"],
-                    mq=scores["mq"],
-                    gq=scores["gq"],
                 )
+
                 db.add(history)
+
+            history.breakdown_json = {
+                "vocabulary": vocabulary_json
+            }
+
+            # =====================================
+            # COMMIT
+            # =====================================
 
             await db.commit()
 
-            print(f"✅ Analytics processed child {child.id}")
+            print(f"[OK] Analytics processed child {child.id}")
 
         except Exception as e:
+
             await db.rollback()
-            print(f"❌ Analytics failed child {child.id}", str(e))
+
+            print(f"[FAIL] Analytics failed child {child.id}: {str(e)}")
 
 
 # =====================================================
-# MAIN
+# MAIN BATCH
 # =====================================================
 
 async def run_analytics_batch():
@@ -329,19 +392,47 @@ async def run_analytics_batch():
     now = datetime.utcnow()
 
     async with AsyncSessionLocal() as db:
+
         result = await db.execute(
-            select(Child).where(Child.is_deleted == False)
+
+            select(Child)
+
+            .where(
+                Child.is_deleted == False
+            )
         )
-        children = result.scalars().all()
 
-    print(f"🧠 Running analytics for {len(children)} children")
+        children = (
+            result.scalars().all()
+        )
 
-    tasks = [process_child(child, now) for child in children]
+    print(f"[BATCH] Running analytics for {len(children)} children")
+
+    # =====================================
+    # CONTROLLED CONCURRENCY
+    # max 10 children at once — prevents
+    # DB connection exhaustion at scale
+    # =====================================
+
+    semaphore = asyncio.Semaphore(10)
+
+    async def bounded(child):
+        async with semaphore:
+            await process_child(child, now)
+
+    tasks = [bounded(child) for child in children]
 
     await asyncio.gather(*tasks)
 
-    print("✅ Analytics batch completed")
+    print("[BATCH] Analytics batch completed")
 
+
+# =====================================================
+# ENTRYPOINT
+# =====================================================
 
 if __name__ == "__main__":
-    asyncio.run(run_analytics_batch())
+
+    asyncio.run(
+        run_analytics_batch()
+    )

@@ -1,0 +1,128 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL DEV OVERLAY
+# Adds EMQX (self-hosted MQTT broker + dashboard) and RedisInsight on top of
+# the production compose, and wires all three app services to use them.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# Ports exposed locally:
+#   http://localhost:18083   EMQX dashboard      (admin / public)
+#   http://localhost:8001    RedisInsight UI
+#   localhost:1883           MQTT plain-text
+#   localhost:8080           Backend API + /docs (development mode)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Override backend: MQTT_AUTH_SECRET must match the header EMQX sends when
+  # calling our /internal/mqtt/auth and /internal/mqtt/acl hooks.
+  # ─────────────────────────────────────────────────────────────────────────────
+  backend:
+    environment:
+      MQTT_AUTH_SECRET: "dev-mqtt-secret-local"
+    depends_on:
+      emqx:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Override mqtt_gateway: connect to local EMQX instead of production EMQX Cloud.
+  # Plain 1883 inside Docker network, no TLS needed for dev.
+  # ─────────────────────────────────────────────────────────────────────────────
+  mqtt_gateway:
+    environment:
+      MQTT_HOST: "emqx"
+      MQTT_PORT: "1883"
+      MQTT_USE_TLS: "false"
+      MQTT_AUTH_SECRET: "dev-mqtt-secret-local"
+      # Username must match MQTT_GATEWAY_CLIENT_ID so the ACL endpoint
+      # recognises it and returns allow for wildcard subscriptions.
+      # Auth (CONNECT) is not checked because ENABLE_AUTHN=false on port 1883.
+      MQTT_USERNAME: "boboloo-gateway"
+      MQTT_PASSWORD: "dev-gateway-pass"
+    depends_on:
+      emqx:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Override worker: keep MQTT_AUTH_SECRET consistent across all services.
+  # ─────────────────────────────────────────────────────────────────────────────
+  worker:
+    environment:
+      MQTT_AUTH_SECRET: "dev-mqtt-secret-local"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # LOCAL EMQX BROKER
+  # Toy simulators connect via localhost:1883.
+  # Auth/ACL hooks call back to the backend via host.docker.internal:8080.
+  #
+  # NOTE on $$ escaping: Docker Compose would expand ${username} before EMQX
+  # ever sees it.  $${username} is passed to the container as literal ${username},
+  # which is what EMQX's template engine expects.
+  # ─────────────────────────────────────────────────────────────────────────────
+  emqx:
+    image: emqx:5.7.0
+    container_name: boboloo_emqx
+    ports:
+      - "1883:1883"    # MQTT plain-text
+      - "8883:8883"    # MQTT TLS
+      - "18083:18083"  # EMQX dashboard  (admin / public)
+      - "8083:8083"    # MQTT over WebSocket
+    environment:
+      EMQX_NAME: boboloo
+      EMQX_HOST: "127.0.0.1"
+
+      # ── Dev: disable authn on the plain-TCP listener (port 1883) ───────────
+      # Production uses TLS port 8883 with real HTTP-hook auth.  In dev we
+      # use plain 1883 so the gateway and toy simulators connect freely.
+      # The HTTP auth/ACL hooks below are still configured and tested directly
+      # via test_backend.py — they are just not enforced on every connection.
+      EMQX_LISTENERS__TCP__DEFAULT__ENABLE_AUTHN: "false"
+
+      # ── HTTP auth hook (tested directly, not enforced on port 1883 in dev) ─
+      # Secret is embedded in the URL as ?_emqx_secret=... because EMQX 5.x
+      # cannot configure hyphenated header names via environment variables
+      # (EMQX_...__HEADERS__X-Foo-Bar is silently dropped as "unknown_env_var").
+      EMQX_AUTHENTICATION__1__MECHANISM: password_based
+      EMQX_AUTHENTICATION__1__BACKEND: http
+      EMQX_AUTHENTICATION__1__URL: "http://host.docker.internal:8080/internal/mqtt/auth?_emqx_secret=dev-mqtt-secret-local"
+      EMQX_AUTHENTICATION__1__METHOD: post
+      EMQX_AUTHENTICATION__1__BODY: '{"username":"$${username}","password":"$${password}"}'
+
+      # ── HTTP ACL hook ───────────────────────────────────────────────────────
+      EMQX_AUTHORIZATION__SOURCES__1__TYPE: http
+      EMQX_AUTHORIZATION__SOURCES__1__URL: "http://host.docker.internal:8080/internal/mqtt/acl?_emqx_secret=dev-mqtt-secret-local"
+      EMQX_AUTHORIZATION__SOURCES__1__METHOD: post
+      EMQX_AUTHORIZATION__SOURCES__1__BODY: '{"username":"$${username}","topic":"$${topic}","action":"$${action}"}'
+      EMQX_AUTHORIZATION__NO_MATCH: allow
+
+    volumes:
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # REDIS UI — browse queues visually at http://localhost:8001
+  # On first launch: add database → host=redis, port=6379
+  # ─────────────────────────────────────────────────────────────────────────────
+  redis-ui:
+    image: redislabs/redisinsight:latest
+    container_name: boboloo_redis_ui
+    ports:
+      - "8001:5540"
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+volumes:
+  emqx_data:
+  emqx_log:

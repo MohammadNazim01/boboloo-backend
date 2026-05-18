@@ -1,8 +1,7 @@
 import logging
 from openai import AsyncOpenAI
-from app.core.config import settings
 
-client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+from app.core.config import settings as app_settings
 
 
 class AIService:
@@ -16,6 +15,10 @@ class AIService:
         history: list | None = None,
         conversation_id: str | None = None
     ) -> str:
+
+        client = AsyncOpenAI(
+            api_key=app_settings.OPENAI_API_KEY
+        )
 
         logging.info(f"Conversation: {conversation_id}")
         logging.info(f"User question: {question}")
@@ -35,6 +38,7 @@ Child age: {child_age}
 Child interests: {interests_text}
 Speech speed level: {speech_speed}
 Word complexity level: {complexity}
+
 Rules:
 - Use very simple language
 - Maximum 2 sentences
@@ -42,23 +46,40 @@ Rules:
 - Speak appropriately for the child's age
 """
 
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            }
+        ]
 
         if history:
             messages.extend(history)
 
-        messages.append({"role": "user", "content": question})
+        messages.append({
+            "role": "user",
+            "content": question
+        })
+
         logging.info(f"user message: {messages}")
 
-        response = await client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=60,
-        )
+        try:
 
-        reply = response.choices[0].message.content
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                temperature=0.7,
+                max_tokens=60,
+            )
 
-        logging.info(f"AI reply: {reply}")
+            reply = response.choices[0].message.content
 
-        return reply
+            logging.info(f"AI reply: {reply}")
+
+            return reply
+
+        except Exception as e:
+
+            logging.error(f"❌ OPENAI ERROR: {e}")
+
+            return "Sorry buddy, Boboloo is sleeping right now!"

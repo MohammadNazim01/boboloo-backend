@@ -77,7 +77,7 @@ class Child(Base):
     name = Column(String, nullable=False)
     age = Column(Integer, nullable=False)
     birth_date = Column(Date, nullable=True, index=True)
-    guardian_name = Column(String)
+    guardian_name = Column(String, nullable=False)
 
     interests = Column(JSONB, nullable=False, default=lambda: [])
     keywords_filter = Column(JSONB, nullable=False, default=lambda: [])
@@ -108,6 +108,12 @@ class Child(Base):
         "AnalyticsHistory",
         back_populates="child",
         lazy="selectin",
+    )
+
+    streak = relationship(
+        "ChildStreak",
+        back_populates="child",
+        uselist=False,
     )
 
 
@@ -328,20 +334,7 @@ class ChildAnalytics(Base):
         index=True,
     )
 
-    fq = Column(Float, nullable=False)
-    vq = Column(Float, nullable=False)
-    cq = Column(Float, nullable=False)
-    mq = Column(Float, nullable=False)
-    gq = Column(Float, nullable=False)
-
-    velocity = Column(String)
-    confidence = Column(Float)
-    trend_percent = Column(Float)
-
     breakdown_json = Column(JSONB)
-    insight_json = Column(JSONB)
-
-    algorithm_version = Column(String)
 
     updated_at = Column(
         DateTime,
@@ -380,11 +373,7 @@ class AnalyticsHistory(Base):
 
     analytics_date = Column(Date, index=True, nullable=False)
 
-    fq = Column(Float)
-    vq = Column(Float)
-    cq = Column(Float)
-    mq = Column(Float)
-    gq = Column(Float)
+    breakdown_json = Column(JSONB)
 
     created_at = Column(
         DateTime,
@@ -403,6 +392,68 @@ Index(
     AnalyticsHistory.child_id,
     AnalyticsHistory.created_at,
 )
+
+
+# =========================
+# CHILD STREAK
+# =========================
+class ChildStreak(Base):
+    __tablename__ = "child_streaks"
+
+    id = UUID_PK()
+
+    child_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("children.id"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+
+    current_streak = Column(Integer, default=0, nullable=False)
+    longest_streak = Column(Integer, default=0, nullable=False)
+
+    # Date of the last conversation — used at read time to decide
+    # whether the streak is active, at-risk, or broken.
+    last_conversation_date = Column(Date, nullable=True)
+
+    # When the current streak run started — shown in UI ("on streak since May 10")
+    streak_started_at = Column(Date, nullable=True)
+
+    child = relationship("Child", back_populates="streak")
+
+
+# =========================
+# FIRMWARE RELEASE
+# =========================
+class FirmwareRelease(Base):
+    __tablename__ = "firmware_releases"
+
+    id = UUID_PK()
+
+    # Semantic version string, e.g. "1.2.3" — unique across all releases.
+    version = Column(String(32), unique=True, nullable=False, index=True)
+
+    # S3 object key for the signed firmware binary, e.g.
+    # "releases/1.2.3/boboloo-1.2.3-signed.bin"
+    s3_key = Column(String(512), nullable=False)
+
+    # Hex-encoded SHA256 of the signed binary (64 chars).
+    # Sent to the toy in the OTA MQTT command so it can verify the download.
+    sha256 = Column(String(64), nullable=False)
+
+    # Binary size in bytes — informational, also sent to the toy.
+    file_size = Column(Integer, nullable=True)
+
+    # True once QA validates this build and it's safe for production rollout.
+    is_stable = Column(Boolean, nullable=False, default=False)
+
+    release_notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
+    # Firebase UID or username of whoever registered this release.
+    created_by = Column(String, nullable=True)
 
 
 # =========================

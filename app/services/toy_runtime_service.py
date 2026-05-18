@@ -3,26 +3,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import HTTPException
 import logging
-
+import time
 from app.database.models import (
-    ToyStatus,
-    Toy,
-    Child,
-    Conversation,
-    Message,
-    InteractionSettings,
+ToyStatus,
+Toy,
+Child,
+Conversation,
+Message,
+InteractionSettings,
 )
-
-from app.services.ai.ai_service import AIService
+from app.core.job_queue import JobQueue
 from app.services.cache_service import CacheService
-from app.services.rate_limit_service import RateLimitService
 from app.core.redis import redis_client
-
 
 logger = logging.getLogger(__name__)
 
-
 class ToyRuntimeService:
+
 
     MAX_QUESTION_LENGTH = 500
     HEARTBEAT_WRITE_INTERVAL = 60
@@ -36,7 +33,6 @@ class ToyRuntimeService:
         cache_key = f"settings:{child_id}"
 
         cached = await CacheService.get_json(cache_key)
-
         if cached:
             return cached
 
@@ -48,33 +44,14 @@ class ToyRuntimeService:
 
         settings = result.scalar_one_or_none()
 
-        if not settings:
-            payload = {
-                "word_complexity": 3,
-                "speech_speed": 2,
-                "question_frequency": "balanced",
-            }
-
-            await CacheService.set_json(
-                cache_key,
-                payload,
-                ttl=3600
-            )
-
-            return payload
-
+    
         payload = {
-            "word_complexity": settings.word_complexity,
-            "speech_speed": settings.speech_speed,
-            "question_frequency": settings.question_frequency,
+                "word_complexity": settings.word_complexity if settings else 3,
+                "speech_speed": settings.speech_speed if settings else 2,
+                "question_frequency": settings.question_frequency if settings else "balanced",
         }
 
-        await CacheService.set_json(
-            cache_key,
-            payload,
-            ttl=3600
-        )
-
+        await CacheService.set_json(cache_key, payload, ttl=300)
         return payload
 
     # =====================================================
@@ -86,14 +63,11 @@ class ToyRuntimeService:
         cache_key = f"child:{child_id}"
 
         cached = await CacheService.get_json(cache_key)
-
         if cached:
             return cached
 
         result = await db.execute(
-            select(Child).where(
-                Child.id == child_id
-            )
+            select(Child).where(Child.id == child_id)
         )
 
         child = result.scalar_one_or_none()
@@ -108,16 +82,11 @@ class ToyRuntimeService:
             "onboarding_completed": child.onboarding_completed,
         }
 
-        await CacheService.set_json(
-            cache_key,
-            payload,
-            ttl=3600
-        )
-
+        await CacheService.set_json(cache_key, payload, ttl=300)
         return payload
 
     # =====================================================
-    # TOY ASK QUESTION
+    # 🧸 HANDLE QUESTION
     # =====================================================
     @staticmethod
     async def handle_question(
@@ -125,6 +94,7 @@ class ToyRuntimeService:
         db: AsyncSession,
         toy: Toy,
         question: str,
+        toy_id: str,
         battery_level: int | None = None,
         wifi_signal: int | None = None,
     ):
@@ -132,28 +102,10 @@ class ToyRuntimeService:
         if toy.status != ToyStatus.ACTIVE:
             raise HTTPException(403, "Toy not active")
 
-        # =========================
-        # RATE LIMIT
-        # =========================
-        allowed = await RateLimitService.allow(
-            key=f"toyask:{toy.id}",
-            limit=20,
-            window=60,
-        )
-
-        if not allowed:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many requests",
-            )
-
-        if not question:
+        if not question or not question.strip():
             raise HTTPException(400, "Question required")
 
         question = question.strip()
-
-        if not question:
-            raise HTTPException(400, "Question required")
 
         if len(question) > ToyRuntimeService.MAX_QUESTION_LENGTH:
             raise HTTPException(400, "Question too long")
@@ -162,7 +114,7 @@ class ToyRuntimeService:
             raise HTTPException(400, "No active child set")
 
         # =========================
-        # FETCH CHILD (CACHE)
+        # LOAD CHILD
         # =========================
         child = await ToyRuntimeService.load_child(
             db,
@@ -175,11 +127,11 @@ class ToyRuntimeService:
         if not child["onboarding_completed"]:
             raise HTTPException(
                 403,
-                "Complete onboarding before using toy"
+                "Complete onboarding first"
             )
 
         # =========================
-        # SETTINGS (CACHE)
+        # LOAD SETTINGS
         # =========================
         settings = await ToyRuntimeService.load_settings(
             db,
@@ -189,10 +141,12 @@ class ToyRuntimeService:
         today = date.today()
         now = datetime.now(timezone.utc)
 
-        try:
 
+        start_time = time.perf_counter()
+
+        try:
             # =========================
-            # UPDATE TOY TELEMETRY
+            # UPDATE TOY STATE
             # =========================
             toy.last_seen = now
 
@@ -203,7 +157,7 @@ class ToyRuntimeService:
                 toy.wifi_signal = wifi_signal
 
             # =========================
-            # DAILY CONVERSATION
+            # GET / CREATE CONVERSATION
             # =========================
             result = await db.execute(
                 select(Conversation).where(
@@ -221,15 +175,13 @@ class ToyRuntimeService:
                     started_at=now,
                     last_activity=now,
                 )
-
                 db.add(conversation)
                 await db.flush()
-
             else:
                 conversation.last_activity = now
 
             # =========================
-            # USER MESSAGE
+            # SAVE USER MESSAGE
             # =========================
             db.add(
                 Message(
@@ -239,55 +191,32 @@ class ToyRuntimeService:
                 )
             )
 
-            await db.flush()
-
-            # =========================
-            # LAST 6 MESSAGES
-            # =========================
-            msg_result = await db.execute(
-                select(Message)
-                .where(
-                    Message.conversation_id
-                    == conversation.id
-                )
-                .order_by(Message.created_at.desc())
-                .limit(6)
-            )
-
-            history = msg_result.scalars().all()
-
-            history_messages = [
+            await JobQueue.push(
+                "process_child_interaction",
                 {
-                    "role": m.role,
-                    "content": m.content
+                    "toy_id": toy_id,
+                    "child_id": str(toy.active_child_id),
+                    "conversation_id": str(conversation.id),
+                    "question": question,
+                    "settings": settings,
                 }
-                for m in reversed(history)
-            ]
-
-            # =========================
-            # AI RESPONSE
-            # =========================
-            answer = await AIService.generate_child_reply(
-                question=question,
-                child_age=child["age"],
-                interests=child["interests"],
-                settings=settings,
-                history=history_messages,
-                conversation_id=str(conversation.id),
-            )
-
-            # =========================
-            # ASSISTANT MESSAGE
-            # =========================
-            db.add(
-                Message(
-                    conversation_id=conversation.id,
-                    role="assistant",
-                    content=answer,
-                )
             )
 
             await db.commit()
+
+            end_time = time.perf_counter()
+
+            logger.info(
+                f"⚡ Runtime Latency | "
+                f"Toy={toy_id} | "
+                f"{round(end_time - start_time, 2)} sec"
+            )
+
+            return {
+                "conversation_id": conversation.id,
+                "status": "processing",
+            }
+
 
         except HTTPException:
             await db.rollback()
@@ -295,23 +224,15 @@ class ToyRuntimeService:
 
         except Exception as e:
             await db.rollback()
-
-            logger.exception(
-                f"Toy request failed: {e}"
-            )
+            logger.exception(f"Toy runtime failed: {e}")
 
             raise HTTPException(
-                status_code=500,
-                detail="Failed to process toy request"
+                500,
+                "Internal server error"
             )
 
-        return {
-            "conversation_id": conversation.id,
-            "answer": answer,
-        }
-
     # =====================================================
-    # HEARTBEAT
+    # ❤️ HEARTBEAT
     # =====================================================
     @staticmethod
     async def heartbeat(
@@ -326,19 +247,14 @@ class ToyRuntimeService:
         now = datetime.now(timezone.utc)
 
         try:
-
-            # DB write only occasionally
             if (
                 not toy.last_seen
-                or (
-                    now - toy.last_seen
-                ).total_seconds()
+                or (now - toy.last_seen).total_seconds()
                 > ToyRuntimeService.HEARTBEAT_WRITE_INTERVAL
             ):
                 toy.last_seen = now
                 await db.commit()
 
-            # Redis live presence
             await redis_client.hset(
                 f"toy:{toy.id}",
                 mapping={
@@ -347,21 +263,16 @@ class ToyRuntimeService:
                 }
             )
 
-            await redis_client.expire(
-                f"toy:{toy.id}",
-                120
-            )
+            await redis_client.expire(f"toy:{toy.id}", 120)
 
         except Exception as e:
             await db.rollback()
-
-            logger.exception(
-                f"Heartbeat failed: {e}"
-            )
+            logger.exception(f"Heartbeat failed: {e}")
 
             raise HTTPException(
                 500,
-                "Heartbeat update failed"
+                "Heartbeat failed"
             )
 
         return {"status": "alive"}
+

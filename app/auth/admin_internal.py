@@ -1,3 +1,5 @@
+import hmac
+
 from fastapi import Header, HTTPException
 from app.core.config import settings
 
@@ -18,7 +20,7 @@ async def verify_admin_internal(
             detail="Missing admin internal secret",
         )
 
-    if x_admin_secret != settings.ADMIN_INTERNAL_SECRET:
+    if not hmac.compare_digest(x_admin_secret, settings.ADMIN_INTERNAL_SECRET):
         raise HTTPException(
             status_code=403,
             detail="Admin internal access denied",

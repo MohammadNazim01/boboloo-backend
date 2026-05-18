@@ -1,8 +1,8 @@
-"""initial schema
+"""initial_tables
 
-Revision ID: 2827c0dea436
+Revision ID: 1f980c2333d9
 Revises: 
-Create Date: 2026-03-11 15:31:24.681749
+Create Date: 2026-05-06 17:42:23.967223
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '2827c0dea436'
+revision: str = '1f980c2333d9'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -49,6 +49,7 @@ def upgrade() -> None:
     sa.Column('parent_id', sa.UUID(), nullable=False),
     sa.Column('name', sa.String(), nullable=False),
     sa.Column('age', sa.Integer(), nullable=False),
+    sa.Column('birth_date', sa.Date(), nullable=True),
     sa.Column('guardian_name', sa.String(), nullable=True),
     sa.Column('interests', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.Column('keywords_filter', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
@@ -63,6 +64,7 @@ def upgrade() -> None:
     )
     op.create_index('idx_children_interests_gin', 'children', ['interests'], unique=False, postgresql_using='gin')
     op.create_index('idx_children_keywords_gin', 'children', ['keywords_filter'], unique=False, postgresql_using='gin')
+    op.create_index(op.f('ix_children_birth_date'), 'children', ['birth_date'], unique=False)
     op.create_index(op.f('ix_children_created_at'), 'children', ['created_at'], unique=False)
     op.create_index(op.f('ix_children_is_deleted'), 'children', ['is_deleted'], unique=False)
     op.create_index(op.f('ix_children_parent_id'), 'children', ['parent_id'], unique=True)
@@ -104,6 +106,22 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_child_analytics_child_id'), 'child_analytics', ['child_id'], unique=True)
     op.create_index(op.f('ix_child_analytics_updated_at'), 'child_analytics', ['updated_at'], unique=False)
+    op.create_table('child_vocabulary_memory',
+    sa.Column('id', sa.UUID(), nullable=False),
+    sa.Column('child_id', sa.UUID(), nullable=False),
+    sa.Column('word', sa.String(length=64), nullable=False),
+    sa.Column('first_seen', sa.Date(), nullable=False),
+    sa.Column('last_seen', sa.Date(), nullable=False),
+    sa.Column('usage_count', sa.Integer(), nullable=False),
+    sa.ForeignKeyConstraint(['child_id'], ['children.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('child_id', 'word', name='uq_child_word_memory')
+    )
+    op.create_index('idx_child_vocab_child_word_lower', 'child_vocabulary_memory', ['child_id', sa.text('lower(word)')], unique=False)
+    op.create_index('idx_vocab_child_first_seen', 'child_vocabulary_memory', ['child_id', 'first_seen'], unique=False)
+    op.create_index(op.f('ix_child_vocabulary_memory_child_id'), 'child_vocabulary_memory', ['child_id'], unique=False)
+    op.create_index(op.f('ix_child_vocabulary_memory_first_seen'), 'child_vocabulary_memory', ['first_seen'], unique=False)
+    op.create_index(op.f('ix_child_vocabulary_memory_last_seen'), 'child_vocabulary_memory', ['last_seen'], unique=False)
     op.create_table('conversations',
     sa.Column('id', sa.UUID(), nullable=False),
     sa.Column('child_id', sa.UUID(), nullable=False),
@@ -217,6 +235,12 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_conversations_child_id'), table_name='conversations')
     op.drop_index('idx_conversation_child_date', table_name='conversations')
     op.drop_table('conversations')
+    op.drop_index(op.f('ix_child_vocabulary_memory_last_seen'), table_name='child_vocabulary_memory')
+    op.drop_index(op.f('ix_child_vocabulary_memory_first_seen'), table_name='child_vocabulary_memory')
+    op.drop_index(op.f('ix_child_vocabulary_memory_child_id'), table_name='child_vocabulary_memory')
+    op.drop_index('idx_vocab_child_first_seen', table_name='child_vocabulary_memory')
+    op.drop_index('idx_child_vocab_child_word_lower', table_name='child_vocabulary_memory')
+    op.drop_table('child_vocabulary_memory')
     op.drop_index(op.f('ix_child_analytics_updated_at'), table_name='child_analytics')
     op.drop_index(op.f('ix_child_analytics_child_id'), table_name='child_analytics')
     op.drop_table('child_analytics')
@@ -228,6 +252,7 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_children_parent_id'), table_name='children')
     op.drop_index(op.f('ix_children_is_deleted'), table_name='children')
     op.drop_index(op.f('ix_children_created_at'), table_name='children')
+    op.drop_index(op.f('ix_children_birth_date'), table_name='children')
     op.drop_index('idx_children_keywords_gin', table_name='children', postgresql_using='gin')
     op.drop_index('idx_children_interests_gin', table_name='children', postgresql_using='gin')
     op.drop_table('children')
