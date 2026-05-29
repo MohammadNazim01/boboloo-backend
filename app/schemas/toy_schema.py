@@ -10,7 +10,7 @@ from typing import Optional
 class ToyClaimRequest(BaseModel):
     factory_device_id: str = Field(
         ...,
-        description="Factory printed device id from QR"
+        description="Factory device ID read from toy via BLE"
     )
 
 
