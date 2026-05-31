@@ -49,13 +49,35 @@ services:
       disable: true
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # AI WORKER — pops from job_queue, calls OpenAI, saves to DB,
+  # AI WORKER — pops from ai_interaction_queue, calls OpenAI, saves to DB,
   # pushes AI reply to outbound_queue for gateway to publish.
   # ─────────────────────────────────────────────────────────────────────────────
   worker:
     build: .
     container_name: boboloo_worker
     command: python -m app.workers.worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-boboloo}"
+      REDIS_URL: "redis://redis:6379"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      disable: true
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STATUS WORKER — pops from toy_status_queue, updates Redis presence
+  # and DB firmware version on OTA events.
+  # ─────────────────────────────────────────────────────────────────────────────
+  status_worker:
+    build: .
+    container_name: boboloo_status_worker
+    command: python -m app.workers.status_worker
     env_file:
       - .env
     environment:

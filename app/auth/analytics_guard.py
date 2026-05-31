@@ -37,12 +37,13 @@ async def analytics_ready_guard(
     analytics = result.scalars().first()
 
     if not analytics:
-        raise HTTPException(
-            status_code=404,
-            detail="Analytics not ready yet"
+        analytics = ChildAnalytics(
+            child_id=child.id,
+            breakdown_json={},
+            updated_at=None,
         )
 
     return {
         "child": child,
-        "analytics": analytics
+        "analytics": analytics,
     }

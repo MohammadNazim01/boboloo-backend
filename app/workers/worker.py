@@ -1,25 +1,21 @@
 import asyncio
 import logging
+import sys
 
-# Load .env before any app imports so settings are populated in local dev.
 from dotenv import load_dotenv
 load_dotenv()
 
-from app.core.job_queue import JobQueue
+from app.core.job_queue import AIInteractionQueue
 from app.core.redis import redis_client
-from app.workers.handlers import handle_interaction, handle_toy_status
+from app.workers.handlers import handle_interaction
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("worker")
+logger = logging.getLogger("ai_worker")
 
 HANDLERS = {
     "process_child_interaction": handle_interaction,
-    "process_toy_status": handle_toy_status,
 }
 
-# How often to refresh the heartbeat key (seconds).
-# queue_inspector.py checks this key; the TTL is 30s so writing every 10s
-# gives three missed writes before the inspector shows MISSING.
 HEARTBEAT_INTERVAL = 10
 HEARTBEAT_TTL = 30
 
@@ -33,37 +29,39 @@ async def process_job(job: dict):
 
     if not handler:
         logger.error(f"Unknown job type '{job_type}' — sending to DLQ")
-        await JobQueue.push_failed(job)
+        await AIInteractionQueue.push_failed(job)
         return
 
-    logger.info(f"Processing job: {job_type} (attempt {attempt}/{JobQueue.MAX_ATTEMPTS})")
+    logger.info(f"Processing job: {job_type} (attempt {attempt}/{AIInteractionQueue.MAX_ATTEMPTS})")
 
     try:
         await handler(payload)
+        await AIInteractionQueue.ack(job)
         logger.info(f"Job done: {job_type}")
 
     except Exception as e:
         logger.error(f"Job failed: {job_type} attempt {attempt}: {e}")
 
-        if attempt < JobQueue.MAX_ATTEMPTS:
-            await JobQueue.retry(job)
+        if attempt < AIInteractionQueue.MAX_ATTEMPTS:
+            await AIInteractionQueue.retry(job)
             logger.info(
                 f"Job re-queued: {job_type} "
-                f"(attempt {attempt + 1}/{JobQueue.MAX_ATTEMPTS})"
+                f"(attempt {attempt + 1}/{AIInteractionQueue.MAX_ATTEMPTS})"
             )
         else:
-            await JobQueue.push_failed(job)
-            logger.error(
-                f"Job exhausted retries after {attempt} attempts "
-                f"— moved to DLQ: {job_type}"
-            )
+            await AIInteractionQueue.push_failed(job)
+            logger.error(f"Job exhausted retries — moved to DLQ: {job_type}")
 
 
 async def worker_loop():
-    logger.info("Worker started...")
+    recovered = await AIInteractionQueue.recover_stuck_jobs()
+    if recovered:
+        logger.info(f"Recovered {recovered} stuck job(s) from previous crash")
+
+    logger.info("AI Worker started...")
 
     while True:
-        job = await JobQueue.pop()
+        job = await AIInteractionQueue.pop()
 
         if job:
             await process_job(job)
@@ -72,10 +70,9 @@ async def worker_loop():
 
 
 async def heartbeat_loop():
-    """Write a short-TTL key so queue_inspector.py can confirm the worker is alive."""
     while True:
         try:
-            await redis_client.set("worker:heartbeat", "1", ex=HEARTBEAT_TTL)
+            await redis_client.set("ai_worker:heartbeat", "1", ex=HEARTBEAT_TTL)
         except Exception as e:
             logger.warning(f"Heartbeat write failed: {e}")
         await asyncio.sleep(HEARTBEAT_INTERVAL)
@@ -86,4 +83,6 @@ async def main():
 
 
 if __name__ == "__main__":
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

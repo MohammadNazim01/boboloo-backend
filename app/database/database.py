@@ -1,7 +1,5 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy.pool import NullPool
-
 from app.core.config import settings
 
 
@@ -18,12 +16,16 @@ Base = declarative_base()
 
 if settings.ENVIRONMENT == "production":
 
-    # Production containers (Cloud Run / AWS)
-    # NullPool: no persistent pool — each request gets a fresh connection.
-    # pool_pre_ping is meaningless with NullPool and is omitted.
+    # Production (AWS ECS long-running containers)
+    # Small pool per container — prevents exhausting RDS connection limit
+    # when running multiple replicas. pool_pre_ping detects stale connections.
     engine = create_async_engine(
         settings.DATABASE_URL,
-        poolclass=NullPool,
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30,
+        pool_recycle=1800,
+        pool_pre_ping=True,
         echo=False,
     )
 

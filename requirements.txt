@@ -39,6 +39,7 @@ nltk>=3.9
 python-dateutil==2.9.0
 
 redis==5.0.4
+sentry-sdk[fastapi]==2.8.0
 
 gmqtt==0.6.13
 

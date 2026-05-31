@@ -58,6 +58,19 @@ class Settings(BaseSettings):
     S3_PRESIGN_EXPIRY: int = 1800  # 30 minutes
 
     # ===============================
+    # SENTRY
+    # ===============================
+    SENTRY_DSN: str | None = None
+
+    # ===============================
+    # CORS
+    # ===============================
+    # Comma-separated list of allowed origins, e.g.:
+    # "https://app.boboloo.com,https://admin.boboloo.com"
+    # Use "*" only for development.
+    CORS_ORIGINS: str = "*"
+
+    # ===============================
     # ENV
     # ===============================
     ENVIRONMENT: str = "development"

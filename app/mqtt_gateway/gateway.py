@@ -17,7 +17,7 @@ import signal
 from gmqtt import Client as MQTTClient
 
 from app.core.config import settings
-from app.core.job_queue import JobQueue, OutboundQueue
+from app.core.job_queue import AIInteractionQueue, ToyStatusQueue, OutboundQueue
 
 logger = logging.getLogger("mqtt_gateway")
 
@@ -97,7 +97,7 @@ async def _handle_audio_in(device_id: str, payload: bytes, topic: str):
         )
         return
 
-    await JobQueue.push(
+    await AIInteractionQueue.push(
         "process_child_interaction",
         {
             "device_id": device_id,
@@ -117,7 +117,7 @@ async def _handle_status(device_id: str, payload: bytes):
         logger.warning(f"Non-JSON status payload from {device_id}")
         return
 
-    await JobQueue.push(
+    await ToyStatusQueue.push(
         "process_toy_status",
         {
             "device_id": device_id,
