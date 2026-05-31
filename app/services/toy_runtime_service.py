@@ -12,7 +12,7 @@ Conversation,
 Message,
 InteractionSettings,
 )
-from app.core.job_queue import JobQueue
+from app.core.job_queue import AIInteractionQueue
 from app.services.cache_service import CacheService
 from app.core.redis import redis_client
 
@@ -191,7 +191,9 @@ class ToyRuntimeService:
                 )
             )
 
-            await JobQueue.push(
+            await db.commit()
+
+            await AIInteractionQueue.push(
                 "process_child_interaction",
                 {
                     "toy_id": toy_id,
@@ -201,8 +203,6 @@ class ToyRuntimeService:
                     "settings": settings,
                 }
             )
-
-            await db.commit()
 
             end_time = time.perf_counter()
 

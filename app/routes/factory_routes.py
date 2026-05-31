@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import secrets
 from datetime import datetime, timezone
 
@@ -34,7 +35,7 @@ async def provision_toy(
 ):
 
     # Validate factory secret
-    if factory_secret != settings.FACTORY_SECRET_KEY:
+    if not hmac.compare_digest(factory_secret, settings.FACTORY_SECRET_KEY):
         raise HTTPException(status_code=403, detail="Invalid factory secret")
 
     device_id = payload.factory_device_id.strip().upper()
@@ -84,7 +85,7 @@ async def provision_batch(
     db: AsyncSession = Depends(get_db),
 ):
 
-    if factory_secret != settings.FACTORY_SECRET_KEY:
+    if not hmac.compare_digest(factory_secret, settings.FACTORY_SECRET_KEY):
         raise HTTPException(status_code=403, detail="Invalid factory secret")
 
     device_ids = [d.strip().upper() for d in payload.device_ids]
@@ -144,7 +145,7 @@ async def dev_issue_key(
     if settings.ENVIRONMENT != "development":
         raise HTTPException(status_code=404, detail="Not found")
 
-    if factory_secret != settings.FACTORY_SECRET_KEY:
+    if not hmac.compare_digest(factory_secret, settings.FACTORY_SECRET_KEY):
         raise HTTPException(status_code=403, detail="Invalid factory secret")
 
     device_id = factory_device_id.strip().upper()
@@ -169,9 +170,11 @@ async def dev_issue_key(
     )
     child = c_result.scalar_one_or_none()
     if not child:
-        child = Child(parent_id=parent.id, name="Dev Child", age=6, guardian_name="Dev Parent")
+        child = Child(parent_id=parent.id, name="Dev Child", age=6, guardian_name="Dev Parent", onboarding_completed=True)
         db.add(child)
         await db.flush()
+    else:
+        child.onboarding_completed = True
 
     # Activate the toy (set status ACTIVE, link to parent + child)
     toy.owner_parent_id = parent.id

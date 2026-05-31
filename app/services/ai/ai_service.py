@@ -3,6 +3,10 @@ from openai import AsyncOpenAI
 
 from app.core.config import settings as app_settings
 
+# Module-level singleton — one connection pool shared across all worker coroutines.
+# Swap this out when integrating the internal AWS LLM service.
+_openai_client = AsyncOpenAI(api_key=app_settings.OPENAI_API_KEY)
+
 
 class AIService:
 
@@ -15,10 +19,6 @@ class AIService:
         history: list | None = None,
         conversation_id: str | None = None
     ) -> str:
-
-        client = AsyncOpenAI(
-            api_key=app_settings.OPENAI_API_KEY
-        )
 
         logging.info(f"Conversation: {conversation_id}")
         logging.info(f"User question: {question}")
@@ -65,7 +65,7 @@ Rules:
 
         try:
 
-            response = await client.chat.completions.create(
+            response = await _openai_client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=messages,
                 temperature=0.7,

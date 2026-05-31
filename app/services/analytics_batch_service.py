@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, date, timedelta
 
 from sqlalchemy import select
@@ -19,6 +20,8 @@ from app.database.models import (
 from app.services.analytics_engine.engine import (
     generate_analytics,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # =====================================================
@@ -226,7 +229,7 @@ async def process_child(
             if len(text_list) < 3:
 
                 await db.commit()
-                print(f"[SKIP] Not enough messages for child {child.id}")
+                logger.debug(f"Analytics skipped — not enough messages for child {child.id}")
 
                 return
 
@@ -374,13 +377,13 @@ async def process_child(
 
             await db.commit()
 
-            print(f"[OK] Analytics processed child {child.id}")
+            logger.info(f"Analytics processed child {child.id}")
 
         except Exception as e:
 
             await db.rollback()
 
-            print(f"[FAIL] Analytics failed child {child.id}: {str(e)}")
+            logger.error(f"Analytics failed for child {child.id}: {e}", exc_info=True)
 
 
 # =====================================================
@@ -406,7 +409,7 @@ async def run_analytics_batch():
             result.scalars().all()
         )
 
-    print(f"[BATCH] Running analytics for {len(children)} children")
+    logger.info(f"Analytics batch started — {len(children)} children")
 
     # =====================================
     # CONTROLLED CONCURRENCY
@@ -424,7 +427,7 @@ async def run_analytics_batch():
 
     await asyncio.gather(*tasks)
 
-    print("[BATCH] Analytics batch completed")
+    logger.info("Analytics batch completed")
 
 
 # =====================================================
