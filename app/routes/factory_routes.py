@@ -184,7 +184,7 @@ async def dev_issue_key(
     toy.is_active = True
 
     # Generate API key identical to claim flow
-    raw_key  = secrets.token_urlsafe(32)
+    raw_key  = secrets.token_hex(32)  # 64 hex chars — matches firmware TOY_API_KEY_LEN
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     db.add(APIKey(key_hash=key_hash, toy_id=toy.id, revoked=False))
 

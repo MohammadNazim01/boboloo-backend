@@ -79,8 +79,8 @@ class ToyClaimService:
         toy.status = ToyStatus.ACTIVE
         toy.is_active = True
 
-        # 🔑 Generate API key
-        raw_api_key = secrets.token_urlsafe(32)
+        # 🔑 Generate API key — 64 hex chars to match firmware TOY_API_KEY_LEN
+        raw_api_key = secrets.token_hex(32)
 
         key_hash = hashlib.sha256(
             raw_api_key.encode()
@@ -163,8 +163,8 @@ class ToyClaimService:
             except Exception as e:
                 logger.error(f"Failed to purge old toy_key from Redis: {e}")
 
-        # 🔑 Generate new API key
-        raw_api_key = secrets.token_urlsafe(32)
+        # 🔑 Generate new API key — 64 hex chars to match firmware TOY_API_KEY_LEN
+        raw_api_key = secrets.token_hex(32)
 
         key_hash = hashlib.sha256(
             raw_api_key.encode()
