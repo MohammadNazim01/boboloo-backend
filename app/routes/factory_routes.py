@@ -3,6 +3,7 @@ import hmac
 import logging
 import re
 import secrets
+import uuid as _uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -142,7 +143,11 @@ async def provision_batch(
     for device_id in device_ids:
         if device_id in existing_ids:
             continue
+        # Generate toy_uuid explicitly so it is known before the DB flush.
+        # SQLAlchemy's column-level default= is only called during flush, so
+        # t.toy_uuid would be None if we relied on it here.
         toy = Toy(
+            toy_uuid=_uuid.uuid4(),
             factory_device_id=device_id,
             status=ToyStatus.PROVISIONED,
             is_active=True,
@@ -155,8 +160,7 @@ async def provision_batch(
 
     db.add_all(toys)
 
-    # Capture UUIDs before commit (default= is a Python-side callable, so the
-    # UUID is already set on the object; commit would expire it otherwise).
+    # UUIDs are set above in Python before any flush, so this is safe.
     created = [
         {"device_id": t.factory_device_id, "toy_uuid": str(t.toy_uuid)}
         for t in toys
