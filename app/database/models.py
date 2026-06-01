@@ -230,6 +230,8 @@ class APIKey(Base):
 
     revoked = Column(Boolean, default=False)
 
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+
 
 Index(
     "idx_api_key_hash_revoked",
