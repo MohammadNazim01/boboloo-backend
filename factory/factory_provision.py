@@ -335,7 +335,7 @@ def main() -> None:
     print("OK")
 
     # ── Provision in chunks ─────────────────────────────────────
-    timestamp  = datetime.datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    timestamp  = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
     all_toys:  list[dict]  = []
     failed_ids: list[str]  = []
     total_created    = 0
