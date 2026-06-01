@@ -253,7 +253,12 @@ factory-secret: <secret>
   "batch_id": "BATCH-2026-001",
   "requested": 3,
   "created": 3,
-  "duplicates": 0
+  "duplicates": 0,
+  "toys": [
+    {"device_id": "TOY-A1B2C3", "toy_uuid": "f47ac10b-58cc-4372-a567-0e02b2c3d479"},
+    {"device_id": "TOY-D4E5F6", "toy_uuid": "a3f1b2c3-d4e5-6789-ab01-23456789cdef"},
+    {"device_id": "TOY-G7H8I9", "toy_uuid": "7c8d9e0f-1234-5678-90ab-cdef01234567"}
+  ]
 }
 ```
 
@@ -265,13 +270,18 @@ factory-secret: <secret>
 
 ### Provisioning Script
 
-The Boboloo team provides a Python helper script:
+The Boboloo team provides a Python helper script (`factory_provision.py`) that
+handles validation, retry logic, and output file generation automatically:
 
 ```bash
-python provision_toy.py TOY-A1B2C3 TOY-D4E5F6
-# or for a full batch:
-python provision_toy.py --batch 100 --prefix TOY-AA
+# Add device IDs to device_ids.txt (one per line), then run:
+python factory_provision.py --batch-id BATCH-2026-001 --firmware 1.0.0 --hw A1
+
+# Validate input without touching the backend:
+python factory_provision.py --batch-id BATCH-2026-001 --firmware 1.0.0 --hw A1 --dry-run
 ```
+
+See `factory/quick-start.md` for full setup and usage instructions.
 
 ---
 
