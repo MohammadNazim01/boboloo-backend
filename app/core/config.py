@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     MQTT_PASSWORD: str | None = None    # Gateway service-account password
     MQTT_USE_TLS: bool = True
     MQTT_GATEWAY_CLIENT_ID: str = "boboloo-gateway"
+    # Path to the broker's CA certificate file.
+    # Required when EMQX uses a self-signed CA (our production setup).
+    # Without this, gmqtt's ssl=True uses only the system CA bundle and
+    # rejects the self-signed cert, breaking the gateway connection entirely.
+    MQTT_CA_CERT_PATH: str | None = None
 
     # Secret that EMQX sends in X-Mqtt-Auth-Secret header when calling our
     # auth/ACL endpoints. Set the same value in EMQX HTTP auth plugin config.
@@ -55,7 +60,7 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str | None = None
     S3_FIRMWARE_BUCKET: str = ""
     # TTL for pre-signed download URLs sent to toys (seconds).
-    S3_PRESIGN_EXPIRY: int = 1800  # 30 minutes
+    S3_PRESIGN_EXPIRY: int = 3600  # 1 hour — allows offline toys time to come online and download
 
     # ===============================
     # SENTRY
