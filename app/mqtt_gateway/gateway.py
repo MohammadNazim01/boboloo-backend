@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import signal
+import ssl as _ssl
 
 from gmqtt import Client as MQTTClient
 
@@ -188,10 +189,22 @@ async def run():
     if settings.MQTT_USERNAME and settings.MQTT_PASSWORD:
         client.set_auth_credentials(settings.MQTT_USERNAME, settings.MQTT_PASSWORD)
 
+    ssl_param: bool | _ssl.SSLContext = False
+    if settings.MQTT_USE_TLS:
+        # Build an explicit SSL context so we can load our self-signed CA cert.
+        # Passing ssl=True would use the system CA bundle, which rejects self-signed certs.
+        ssl_ctx = _ssl.create_default_context()
+        if settings.MQTT_CA_CERT_PATH:
+            ssl_ctx.load_verify_locations(settings.MQTT_CA_CERT_PATH)
+            # EMQX default cert has CN=Server, not an IP — disable hostname check
+            # while still verifying the cert is signed by our CA.
+            ssl_ctx.check_hostname = False
+        ssl_param = ssl_ctx
+
     await client.connect(
         settings.MQTT_HOST,
         settings.MQTT_PORT,
-        ssl=settings.MQTT_USE_TLS,
+        ssl=ssl_param,
         keepalive=60,
     )
 

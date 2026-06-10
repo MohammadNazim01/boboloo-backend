@@ -97,11 +97,13 @@ async def mqtt_auth(
     if not username or not password:
         return _deny()
 
-    # The gateway service account authenticates via EMQX's built-in user DB,
-    # not this endpoint. If it somehow ends up here, reject — the static user
-    # is not in our api_keys table.
+    # Gateway authenticates via MQTT_PASSWORD. EMQX built-in-db is empty so
+    # it falls through to this HTTP endpoint — validate the password directly.
     if username.lower() == settings.MQTT_GATEWAY_CLIENT_ID.lower():
-        logger.warning("Gateway client unexpectedly hitting HTTP auth — check EMQX config")
+        if settings.MQTT_PASSWORD and hmac.compare_digest(password, settings.MQTT_PASSWORD):
+            logger.info("MQTT auth OK | gateway connected")
+            return JSONResponse({"result": "allow", "is_superuser": True}, status_code=200)
+        logger.warning("MQTT auth failed | gateway password mismatch")
         return _deny()
 
     try:
