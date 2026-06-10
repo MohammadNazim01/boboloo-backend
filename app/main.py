@@ -3,9 +3,12 @@ import logging
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import text
 
+from app.database.database import AsyncSessionLocal
 from app.routes import router
 from app.routes.admin_routes import router as admin_router
 from app.routes.ota_routes import router as ota_router
@@ -84,6 +87,15 @@ async def root():
 
 @app.get("/health")
 async def health():
+    try:
+        await redis_client.ping()
+    except Exception:
+        return JSONResponse({"status": "unhealthy", "detail": "redis_unavailable"}, status_code=503)
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+    except Exception:
+        return JSONResponse({"status": "unhealthy", "detail": "db_unavailable"}, status_code=503)
     return {"status": "ok"}
 
 

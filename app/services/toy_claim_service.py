@@ -12,16 +12,24 @@ logger = logging.getLogger(__name__)
 from app.database.models import (
     Toy,
     APIKey,
+    AuditLog,
     ToyStatus,
     Child,
 )
 
 from app.core.redis import redis_client
 
+
+def _generate_api_key() -> tuple[str, str]:
+    """Return (raw_key, key_hash) — 64 hex chars, SHA-256 hashed."""
+    raw = secrets.token_hex(32)
+    return raw, hashlib.sha256(raw.encode()).hexdigest()
+
+
 class ToyClaimService:
 
     # ================================
-    # 🧸 CLAIM TOY
+    # CLAIM TOY
     # ================================
     @staticmethod
     async def claim_toy(
@@ -30,79 +38,61 @@ class ToyClaimService:
         parent_id,
         factory_device_id: str,
     ):
-
-        # Normalize input
         factory_device_id = factory_device_id.strip().upper()
 
-        # 🔒 Fetch toy WITH ROW LOCK
+        # Row lock prevents two simultaneous claims of the same toy.
         result = await db.execute(
             select(Toy)
             .where(Toy.factory_device_id == factory_device_id)
             .with_for_update()
         )
-
         toy = result.scalar_one_or_none()
 
         if not toy:
-            raise HTTPException(
-                status_code=404,
-                detail="Toy not provisioned by factory",
-            )
+            raise HTTPException(404, "Toy not provisioned by factory")
 
-        # 🔒 Ensure toy not already claimed
+        # Idempotent retry: if this parent already owns the toy (network error
+        # on the first claim response), rotate and return a fresh key so the
+        # parent app can re-do BLE provisioning without hitting support.
+        if toy.status == ToyStatus.ACTIVE and toy.owner_parent_id == parent_id:
+            return await ToyClaimService._rotate_and_return(db, toy, parent_id, reason="claim_retry")
+
         if toy.status != ToyStatus.PROVISIONED:
-            raise HTTPException(
-                status_code=400,
-                detail="Toy already claimed or unavailable",
-            )
+            raise HTTPException(400, "Toy already claimed or unavailable")
 
-        # 🔎 Fetch parent's child
         child_result = await db.execute(
             select(Child).where(
                 Child.parent_id == parent_id,
                 Child.is_deleted == False,
             )
         )
-
         child = child_result.scalar_one_or_none()
-
         if not child:
-            raise HTTPException(
-                status_code=400,
-                detail="Create child profile before claiming toy",
-            )
+            raise HTTPException(400, "Create child profile before claiming toy")
 
-        # ✅ Activate toy
+        raw_api_key, key_hash = _generate_api_key()
+
         toy.owner_parent_id = parent_id
         toy.active_child_id = child.id
         toy.claimed_at = datetime.now(timezone.utc)
         toy.status = ToyStatus.ACTIVE
         toy.is_active = True
 
-        # 🔑 Generate API key — 64 hex chars to match firmware TOY_API_KEY_LEN
-        raw_api_key = secrets.token_hex(32)
-
-        key_hash = hashlib.sha256(
-            raw_api_key.encode()
-        ).hexdigest()
-
-        db.add(
-            APIKey(
-                key_hash=key_hash,
-                toy_id=toy.id,
-                revoked=False,
-            )
-        )
+        db.add(APIKey(key_hash=key_hash, toy_id=toy.id, revoked=False))
+        db.add(AuditLog(
+            action="toy.claim",
+            event_data={
+                "device_id": factory_device_id,
+                "toy_uuid": str(toy.toy_uuid),
+                "parent_id": str(parent_id),
+                "child_id": str(child.id),
+            },
+        ))
 
         await db.commit()
         await db.refresh(toy)
 
-        # 🔥 CACHE IN REDIS (IMPORTANT)
-        await redis_client.set(
-            f"toy_key:{key_hash}",
-            str(toy.id),
-            ex=86400
-        )
+        await redis_client.set(f"toy_key:{key_hash}", str(toy.id), ex=86400)
 
         return {
             "toy_uuid": toy.toy_uuid,
@@ -111,7 +101,7 @@ class ToyClaimService:
         }
 
     # ================================
-    # 🔑 ROTATE API KEY
+    # ROTATE API KEY
     # ================================
     @staticmethod
     async def rotate_key(
@@ -120,28 +110,22 @@ class ToyClaimService:
         parent_id,
         toy_id,
     ):
-
-        # 🔎 Fetch toy
-        result = await db.execute(
-            select(Toy).where(Toy.id == toy_id)
-        )
-
+        result = await db.execute(select(Toy).where(Toy.id == toy_id))
         toy = result.scalar_one_or_none()
 
         if not toy:
-            raise HTTPException(
-                status_code=404,
-                detail="Toy not found",
-            )
+            raise HTTPException(404, "Toy not found")
 
-        # 🔒 Ensure ownership
         if toy.owner_parent_id != parent_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Unauthorized",
-            )
+            raise HTTPException(403, "Unauthorized")
 
-        # 🔄 Fetch old key hashes before revoking so we can purge Redis
+        return await ToyClaimService._rotate_and_return(db, toy, parent_id, reason="parent_request")
+
+    # ================================
+    # INTERNAL: revoke old keys, issue new one, write audit log
+    # ================================
+    @staticmethod
+    async def _rotate_and_return(db: AsyncSession, toy: Toy, parent_id, reason: str):
         old_keys_result = await db.execute(
             select(APIKey.key_hash).where(
                 APIKey.toy_id == toy.id,
@@ -151,41 +135,38 @@ class ToyClaimService:
         old_hashes = old_keys_result.scalars().all()
 
         await db.execute(
-            update(APIKey)
-            .where(APIKey.toy_id == toy.id)
-            .values(revoked=True)
+            update(APIKey).where(APIKey.toy_id == toy.id).values(revoked=True)
         )
 
-        # Purge stale Redis entries so old keys stop authenticating immediately
-        for old_hash in old_hashes:
-            try:
-                await redis_client.delete(f"toy_key:{old_hash}")
-            except Exception as e:
-                logger.error(f"Failed to purge old toy_key from Redis: {e}")
-
-        # 🔑 Generate new API key — 64 hex chars to match firmware TOY_API_KEY_LEN
-        raw_api_key = secrets.token_hex(32)
-
-        key_hash = hashlib.sha256(
-            raw_api_key.encode()
-        ).hexdigest()
-
-        db.add(
-            APIKey(
-                key_hash=key_hash,
-                toy_id=toy.id,
-                revoked=False,
-            )
-        )
+        raw_api_key, key_hash = _generate_api_key()
+        db.add(APIKey(key_hash=key_hash, toy_id=toy.id, revoked=False))
+        db.add(AuditLog(
+            action="toy.rotate_key",
+            event_data={
+                "device_id": toy.factory_device_id,
+                "toy_uuid": str(toy.toy_uuid),
+                "parent_id": str(parent_id),
+                "reason": reason,
+                "keys_revoked": len(old_hashes),
+            },
+        ))
 
         await db.commit()
 
-        # 🔥 CACHE NEW KEY
-        await redis_client.set(
-            f"toy_key:{key_hash}",
-            str(toy.id),
-            ex=86400
-        )
+        # Purge old Redis entries. If a delete fails, forcibly expire the key
+        # in 5 minutes so the residual auth window is bounded even if Redis
+        # is flaky.
+        for old_hash in old_hashes:
+            try:
+                await redis_client.delete(f"toy_key:{old_hash}")
+            except Exception:
+                logger.error("Redis purge failed for %s — setting 5-min expiry", old_hash)
+                try:
+                    await redis_client.expire(f"toy_key:{old_hash}", 300)
+                except Exception:
+                    logger.error("Redis expire also failed for %s", old_hash)
+
+        await redis_client.set(f"toy_key:{key_hash}", str(toy.id), ex=86400)
 
         return {
             "toy_api_key": raw_api_key,

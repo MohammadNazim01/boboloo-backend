@@ -68,8 +68,10 @@ async def get_identifier(request: Request):
 
 async def rate_limit_middleware(request: Request, call_next):
 
-    # skip health/public
-    if request.url.path in ["/", "/health"]:
+    # skip health/public endpoints and internal EMQX auth callbacks.
+    # /internal/mqtt/* is called by EMQX from a single private IP — it would
+    # exhaust the IP fallback bucket (100/60s) during any mass reconnect storm.
+    if request.url.path in ["/", "/health"] or request.url.path.startswith("/internal/"):
         return await call_next(request)
 
     try:

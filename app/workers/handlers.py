@@ -288,7 +288,10 @@ async def _run_ai_interaction(
     await db.commit()
 
     # ── Push reply to MQTT Gateway via outbound_queue ────────────────────────
+    # QoS 0 (fire-and-forget): audio responses must not be buffered by the
+    # broker. A toy that reconnects after being offline should not receive
+    # hours-old AI answers out of context.
     topic = f"boboloo/toy/{device_id}/audio/out"
-    await OutboundQueue.push(topic, answer, qos=1)
+    await OutboundQueue.push(topic, answer, qos=0)
 
     logger.info(f"Interaction complete | device={device_id} | child={child_id}")

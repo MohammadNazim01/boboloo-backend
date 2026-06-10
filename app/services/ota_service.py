@@ -11,8 +11,7 @@ Flow for pushing OTA to a toy:
   8. Toy reports result via boboloo/toy/{id}/status → handle_toy_status updates DB
 """
 
-import hashlib
-import hmac
+import asyncio
 import logging
 import json
 from typing import Optional
@@ -68,9 +67,9 @@ async def register_release(
     sha256 must be the hex digest of the signed binary — computed by the
     signing pipeline and passed in by the admin.
     """
-    # Enforce: sha256 must be 64 lowercase hex chars
-    if not all(c in "0123456789abcdef" for c in payload.sha256.lower()):
-        raise HTTPException(400, "sha256 must be 64 lowercase hex characters")
+    # Enforce: sha256 must be exactly 64 lowercase hex chars
+    if len(payload.sha256) != 64 or not all(c in "0123456789abcdef" for c in payload.sha256.lower()):
+        raise HTTPException(400, "sha256 must be exactly 64 lowercase hex characters")
 
     existing = await db.execute(
         select(FirmwareRelease).where(FirmwareRelease.version == payload.version)
@@ -78,9 +77,10 @@ async def register_release(
     if existing.scalar_one_or_none():
         raise HTTPException(409, f"Firmware version '{payload.version}' already registered")
 
-    # Verify the S3 object exists before registering
+    # Verify the S3 object exists before registering. Run in a thread because
+    # boto3 is synchronous — calling it directly would block the event loop.
     if settings.S3_FIRMWARE_BUCKET:
-        _assert_s3_object_exists(payload.s3_key)
+        await asyncio.to_thread(_assert_s3_object_exists, payload.s3_key)
 
     release = FirmwareRelease(
         version=payload.version,

@@ -1,6 +1,6 @@
 import uuid
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     Column,
     String,
@@ -86,10 +86,10 @@ class Child(Base):
     onboarding_completed = Column(Boolean, default=False)
 
     is_deleted = Column(Boolean, default=False, index=True)
-    deleted_at = Column(DateTime, nullable=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, onupdate=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=lambda: datetime.now(timezone.utc))
 
     parent = relationship("Parent", back_populates="children")
 
@@ -305,7 +305,7 @@ class Message(Base):
     role = Column(Enum(MessageRole), nullable=False, index=True)
     content = Column(Text, nullable=False)
 
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
     conversation = relationship(
         "Conversation",
@@ -339,7 +339,7 @@ class ChildAnalytics(Base):
     breakdown_json = Column(JSONB)
 
     updated_at = Column(
-        DateTime,
+        DateTime(timezone=True),
         nullable=False,
         index=True,
     )
@@ -378,8 +378,8 @@ class AnalyticsHistory(Base):
     breakdown_json = Column(JSONB)
 
     created_at = Column(
-        DateTime,
-        default=datetime.utcnow,
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
         index=True,
     )
 
@@ -488,7 +488,7 @@ class AuditLog(Base):
     action = Column(String, nullable=False)
     event_data = Column(JSONB)
 
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
 
 
 # =========================

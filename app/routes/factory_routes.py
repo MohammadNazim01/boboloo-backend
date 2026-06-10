@@ -76,7 +76,10 @@ async def provision_toy(
             },
         ))
         await db.commit()
-        return {"toy_uuid": str(existing.toy_uuid), "status": existing.status.value}
+        return {
+            "toy_uuid": str(existing.toy_uuid),
+            "status": existing.status.value,
+        }
 
     toy = Toy(
         factory_device_id=device_id,
@@ -135,17 +138,18 @@ async def provision_batch(
     device_ids = list(dict.fromkeys(d.strip().upper() for d in payload.device_ids))
 
     result = await db.execute(
-        select(Toy.factory_device_id).where(Toy.factory_device_id.in_(device_ids))
+        select(Toy.factory_device_id)
+        .where(Toy.factory_device_id.in_(device_ids))
     )
-    existing_ids = {row[0] for row in result.fetchall()}
+    existing_ids = set(result.scalars().all())
 
     toys = []
     for device_id in device_ids:
         if device_id in existing_ids:
             continue
         # Generate toy_uuid explicitly so it is known before the DB flush.
-        # SQLAlchemy's column-level default= is only called during flush, so
-        # t.toy_uuid would be None if we relied on it here.
+        # SQLAlchemy's column-level default= is only called during flush,
+        # so t.toy_uuid would be None if we relied on it here.
         toy = Toy(
             toy_uuid=_uuid.uuid4(),
             factory_device_id=device_id,
@@ -160,7 +164,6 @@ async def provision_batch(
 
     db.add_all(toys)
 
-    # UUIDs are set above in Python before any flush, so this is safe.
     created = [
         {"device_id": t.factory_device_id, "toy_uuid": str(t.toy_uuid)}
         for t in toys
@@ -314,7 +317,6 @@ async def dev_issue_key(
     toy.claimed_at = datetime.now(timezone.utc)
     toy.status = ToyStatus.ACTIVE
     toy.is_active = True
-
     raw_key = secrets.token_hex(32)
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     db.add(APIKey(key_hash=key_hash, toy_id=toy.id, revoked=False))

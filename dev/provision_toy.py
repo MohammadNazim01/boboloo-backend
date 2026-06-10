@@ -11,20 +11,26 @@ Automates the full toy setup flow in one command:
 This replaces the manual multi-step curl workflow for local dev.
 
 Usage:
-  python dev/provision_toy.py TEST001
-  python dev/provision_toy.py TEST001 TEST002 TEST003
-  python dev/provision_toy.py --batch 20         # provision SIM001…SIM020
-  python dev/provision_toy.py TEST001 --with-claim
+  FACTORY_SECRET_KEY=<key> python dev/provision_toy.py TEST001
+  FACTORY_SECRET_KEY=<key> python dev/provision_toy.py TEST001 TEST002 TEST003
+  FACTORY_SECRET_KEY=<key> python dev/provision_toy.py --batch 20
+  FACTORY_SECRET_KEY=<key> python dev/provision_toy.py TEST001 --with-claim
 """
 
 import argparse
 import json
+import os
 import sys
 import requests
 
 BASE = "http://localhost:8080"
 
-FACTORY_SECRET = "boboloo-factory-master-key"
+FACTORY_SECRET = os.environ.get("FACTORY_SECRET_KEY", "")
+if not FACTORY_SECRET:
+    sys.exit(
+        "Error: FACTORY_SECRET_KEY environment variable is not set.\n"
+        "Usage: FACTORY_SECRET_KEY=<key> python dev/provision_toy.py <DEVICE_ID>"
+    )
 
 
 def provision(device_id: str) -> dict:
@@ -59,11 +65,12 @@ def provision(device_id: str) -> dict:
 
 def print_toy(device_id: str, result: dict):
     print(f"\n{'─'*55}")
-    print(f"  Device ID  : {device_id}")
-    print(f"  Toy UUID   : {result.get('toy_uuid', 'N/A')}")
+    print(f"  Device ID   : {device_id}")
+    print(f"  Toy UUID    : {result.get('toy_uuid', 'N/A')}")
+    print(f"  Claim Token : {result.get('claim_token', 'N/A')}")
     key = result.get("toy_api_key") or result.get("api_key", "")
-    print(f"  API Key    : {key}")
-    print(f"  Status     : {result.get('status', 'N/A')}")
+    print(f"  API Key     : {key}")
+    print(f"  Status      : {result.get('status', 'N/A')}")
     print(f"{'─'*55}")
     if key:
         print(f"\n  Simulator command:")
@@ -86,8 +93,8 @@ def main():
     elif args.devices:
         device_ids = [d.upper() for d in args.devices]
     else:
-        print("Usage: python dev/provision_toy.py TEST001 [TEST002 ...]")
-        print("       python dev/provision_toy.py --batch 10")
+        print("Usage: FACTORY_SECRET_KEY=<key> python dev/provision_toy.py TEST001 [TEST002 ...]")
+        print("       FACTORY_SECRET_KEY=<key> python dev/provision_toy.py --batch 10")
         sys.exit(1)
 
     print(f"\nProvisioning {len(device_ids)} toy(s)...\n")
@@ -110,7 +117,6 @@ def main():
     print(f"Saved to {out_path}")
 
     if len(results) > 1:
-        # Print a combined simulator command for all toys
         print(f"\nSimulate all {len(results)} toys at once:")
         print(f"  python dev/multi_toy_runner.py")
 
